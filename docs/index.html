@@ -102,6 +102,32 @@
   .lg{display:flex;flex-wrap:wrap;gap:10px 16px;font-size:11px;color:var(--ink-2);margin-top:16px;padding-top:14px;border-top:1px solid var(--line)}
   .lg span{display:inline-flex;align-items:center;gap:6px} .sw{width:10px;height:10px;border-radius:3px;display:inline-block}
 
+  .toolbar{display:flex;flex-wrap:wrap;align-items:center;gap:8px 14px;margin:0 2px 18px}
+  .fg{display:flex;align-items:center;gap:6px}
+  .fg .fl{font-size:9.5px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:var(--ink-3)}
+  select.msel{background:var(--panel);border:1px solid var(--line);color:var(--ink);border-radius:8px;
+    padding:6px 10px;font:inherit;font-size:12px;font-weight:600}
+
+  tr.clickable{cursor:pointer}
+  tr.clickable:hover td{background:var(--panel-2)}
+  tr.rowsel td{background:color-mix(in srgb,var(--s1) 10%,var(--panel))}
+
+  table.heat th.hcol{text-align:center;width:52px}
+  table.heat td.hcell{text-align:center;font-weight:700;border-radius:6px;padding:8px 4px;font-size:12px;white-space:nowrap}
+  table.heat td.hname{white-space:nowrap;width:1%}
+
+  #panelDetalle{display:none}
+  #panelDetalle.on{display:block}
+  .dhead{display:flex;align-items:center;gap:10px;margin-bottom:2px}
+  .dhead .dname{font-size:14px;font-weight:800}
+  .dhead .darea{font-size:11px;color:var(--ink-3);font-weight:700;background:var(--panel-2);padding:2px 8px;border-radius:999px}
+  .dclose{margin-left:auto;border:1px solid var(--line);background:var(--panel);color:var(--ink-2);
+    width:26px;height:26px;border-radius:8px;cursor:pointer;font-size:12px;display:grid;place-items:center}
+  .dclose:hover{border-color:var(--crit);color:var(--crit)}
+  .pill{display:inline-flex;align-items:center;gap:4px;padding:2px 9px;border-radius:999px;font-weight:700;font-size:10.5px}
+  .pill.ok{color:var(--good);background:var(--good-bg)}
+  .pill.bad{color:var(--crit);background:var(--crit-bg)}
+
   .foot{margin-top:20px;font-size:10px;color:var(--ink-3);line-height:1.6}
 </style>
 </head>
@@ -115,7 +141,11 @@
   </div>
 
   <div class="wrap">
-    <p class="pagehead">Por cada colaborador: cuántos días trabajados se pudieron verificar contra la marcación biométrica, y en cuántos de esos días la <b>primera marcación del día</b> no correspondió a la sede que declaró el supervisor.</p>
+    <p class="pagehead">Por cada colaborador: cuántos días trabajados se pudieron verificar contra la marcación biométrica, y en cuántos de esos días la <b>primera marcación del día</b> no correspondió a la sede que declaró el supervisor. Haz clic en un colaborador para ver el detalle día a día.</p>
+
+    <div class="toolbar">
+      <div class="fg"><span class="fl">Mes</span><select class="msel" id="fMes"></select></div>
+    </div>
 
     <div class="sec">Cumplimiento por colaborador</div>
     <div class="card">
@@ -123,17 +153,24 @@
       <div class="tbl-wrap"><table class="sum" id="tablaResumen"></table></div>
     </div>
 
+    <div class="sec">Detalle</div>
+    <div class="card" id="panelDetalle">
+      <div class="dhead"><span class="dname" id="dName"></span><span class="darea" id="dArea"></span><button class="dclose" id="dClose">✕</button></div>
+      <p class="sub" id="dSub"></p>
+      <div class="tbl-wrap"><table class="sum" id="tablaDetalle"></table></div>
+    </div>
+
     <div class="sec">Patrón de asistencia</div>
     <div class="card">
-      <h3>Sede donde más marca cada personal <span class="tag">según su primera marcación de cada día, todo el periodo</span></h3>
-      <div class="blist" id="chartSedes"></div>
-      <div class="lg" id="legendSedes"></div>
+      <h3>Sede donde más marca cada personal <span class="tag" id="pivotTag"></span></h3>
+      <div class="tbl-wrap"><table class="sum heat" id="tablaPivot"></table></div>
+      <div class="lg"><span><i class="sw" style="background:color-mix(in srgb,var(--s1) 15%,var(--panel));border:1px solid var(--line)"></i>pocas veces</span><span><i class="sw" style="background:var(--s1)"></i>muchas veces</span></div>
     </div>
 
     <div class="foot" id="foot"></div>
   </div>
 
-<script src="data.js?v=20260819170723"></script>
-<script src="app.js?v=20260819170723"></script>
+<script src="data.js?v=20260819171655"></script>
+<script src="app.js?v=20260819171655"></script>
 </body>
 </html>

@@ -13,6 +13,10 @@ Logica (simplificada a pedido):
   - Dias de ausencia (Vacaciones/Feriado/etc.), fuera del rango de marcaciones,
     sin DNI identificado, o en sedes sin dispositivo biometrico, no se cuentan
     (no se pueden verificar).
+
+Todo el detalle dia-a-dia se exporta en `registros`; el dashboard arma la
+tabla resumen, el pivote por sede y el detalle por persona en el cliente,
+para que los filtros (mes, persona) sean instantaneos.
 """
 import json
 import re
@@ -28,27 +32,31 @@ MAESTRO = DB / "Maestro Control Actividades.xlsx"
 MARCACIONES = DB / "MARCACIONES INFRA-MMTTO-TI.xlsx"
 CONTROL = DB / "Control de actividades - Mtto y TI.xlsx"
 
+MESES_ES = ["", "enero", "febrero", "marzo", "abril", "mayo", "junio", "julio",
+            "agosto", "septiembre", "octubre", "noviembre", "diciembre"]
+
 # palabra(s) clave que identifican de forma unica a cada sede dentro del
 # nombre del dispositivo biometrico (evita depender de "Biometrico -" que
-# no aparece en todas las variantes, p.ej. "Dasso 5to Piso I")
-KEYWORDS = {
-    "La Victoria": ["VICTORIA"],
-    "Colina": ["COLINA"],
-    "Faucett": ["FAUCETT"],
-    "Surquillo": ["SURQUILLO"],
-    "Surco": ["SURCO"],
-    "Independencia": ["INDEPENDENCIA"],
-    "San Juan de Lurigancho": ["SJL"],
-    "Dasso": ["DASSO"],
-    "Santa Anita": ["SANTA", "ANITA"],
-    "San Borja (Eureka)": ["SAN", "BORJA"],
-    "Derby": ["DERBY"],
-    "Ate": ["ATE"],
-    "Treneman": ["TRENEMAN"],
-    "El Polo (Eureka)": ["POLO"],
-    "Chorrillos": ["CHORRILLOS"],
-    "San Miguel": ["MIGUEL"],
-}
+# no aparece en todas las variantes, p.ej. "Dasso 5to Piso I"), y su
+# abreviado (mismo formato que usa el supervisor en Control de Actividades)
+SEDES_REALES = [
+    ("La Victoria", "Vic", ["VICTORIA"]),
+    ("Colina", "Col", ["COLINA"]),
+    ("Faucett", "Fau", ["FAUCETT"]),
+    ("Surquillo", "Surq", ["SURQUILLO"]),
+    ("Surco", "Sur", ["SURCO"]),
+    ("Independencia", "Ind", ["INDEPENDENCIA"]),
+    ("San Juan de Lurigancho", "SJL", ["SJL"]),
+    ("Dasso", "Dasso", ["DASSO"]),
+    ("Santa Anita", "Ani", ["SANTA", "ANITA"]),
+    ("San Borja (Eureka)", "Bor", ["SAN", "BORJA"]),
+    ("Derby", "Der", ["DERBY"]),
+    ("Ate", "Ate", ["ATE"]),
+    ("Treneman", "Tre", ["TRENEMAN"]),
+    ("El Polo (Eureka)", "Polo", ["POLO"]),
+    ("Chorrillos", "Cho", ["CHORRILLOS"]),
+    ("San Miguel", "SM", ["MIGUEL"]),
+]
 
 
 def norm(s):
@@ -67,18 +75,18 @@ def to_date(v):
     return None
 
 
-def sede_for_device(device_norm):
-    for sede, kws in KEYWORDS.items():
+def sede_real_for_device(device_norm):
+    for sede, abrev, kws in SEDES_REALES:
         if all(k in device_norm for k in kws):
-            return sede
-    return None
+            return sede, abrev
+    return None, None
 
 
 def device_matches_sede(sede_friendly, device_norm):
-    kws = KEYWORDS.get(sede_friendly)
-    if not kws:
-        return False
-    return all(k in device_norm for k in kws)
+    for sede, abrev, kws in SEDES_REALES:
+        if sede == sede_friendly:
+            return all(k in device_norm for k in kws)
+    return False
 
 
 # ------------------------------------------------------------------
@@ -121,7 +129,7 @@ for row in wb_m["Ausencias_NoSede"].iter_rows(min_row=2, values_only=True):
 wb_k = openpyxl.load_workbook(MARCACIONES, data_only=True)
 ws_k = wb_k["CONTROL REGISTRO DE ASISTENCIA"]
 
-primera_marcacion = {}  # (dni, fecha) -> {marco: bool, device: str norm}
+primera_marcacion = {}  # (dni, fecha) -> {marco, device (norm), hora}
 marc_fechas = []
 
 for row in ws_k.iter_rows(min_row=2, values_only=True):
@@ -139,6 +147,7 @@ for row in ws_k.iter_rows(min_row=2, values_only=True):
     primera_marcacion[(dni, fecha)] = {
         "marco": marco,
         "device": norm(device1) if marco else "",
+        "hora": entrada1 if marco else None,
     }
 
 MARC_MIN = min(marc_fechas) if marc_fechas else None
@@ -149,7 +158,7 @@ MARC_MAX = max(marc_fechas) if marc_fechas else None
 # ------------------------------------------------------------------
 wb_c = openpyxl.load_workbook(CONTROL, data_only=True)
 
-primer_reporte = {}  # (dni_or_alias, fecha) -> {dni, alias, area_hint, sede_raw}
+primer_reporte = {}
 
 
 def procesar(sheetname, area_hint):
@@ -163,7 +172,7 @@ def procesar(sheetname, area_hint):
         dni = alias_to_dni.get(alias_key)
         key = (dni or alias_key, fecha)
         if key in primer_reporte:
-            continue  # ya se tomo la primera fila de ese dia
+            continue
         primer_reporte[key] = {
             "dni": dni, "alias": colab, "area_hint": area_hint,
             "sede_raw": sede_raw, "unidad": unidad,
@@ -174,15 +183,14 @@ procesar("Base_Mtto", "Mantto")
 procesar("Base_TI", "TI")
 
 # ------------------------------------------------------------------
-# 4) evaluar cada dia
+# 4) evaluar cada dia -> registros detallados
 # ------------------------------------------------------------------
-por_persona = {}  # dni -> {area, nombre, dias:0, incidencia:0}
-marcas_persona = {}  # dni -> Counter(sede_friendly)
+registros = []
 
-for (dni_or_alias, fecha), rep in primer_reporte.items():
+for (dni_or_alias, fecha), rep in sorted(primer_reporte.items(), key=lambda x: x[0][1]):
     dni = rep["dni"]
     if not dni or dni not in trabajadores:
-        continue  # colaborador no identificado (ej. Ricardo braul) -> no se cuenta
+        continue
 
     sede_raw = rep["sede_raw"]
     sede_key = norm(sede_raw)
@@ -194,59 +202,43 @@ for (dni_or_alias, fecha), rep in primer_reporte.items():
 
     info = sedes_info.get(sede_key)
     if not info or not info["tiene_bio"]:
-        continue  # sede sin dispositivo biometrico -> no verificable
+        continue
 
     mk = primera_marcacion.get((dni, fecha))
-    confirmado = bool(mk and mk["marco"] and device_matches_sede(info["sede"], mk["device"]))
+    sede_real, sede_real_abrev = (None, None)
+    if mk and mk["marco"]:
+        sede_real, sede_real_abrev = sede_real_for_device(mk["device"])
+        if sede_real is None:
+            sede_real = mk["device"].title()
+            sede_real_abrev = "Otro"
+    confirmado = bool(mk and mk["marco"] and sede_real and device_matches_sede(info["sede"], mk["device"]))
 
     trab = trabajadores[dni]
-    p = por_persona.setdefault(dni, {"area": trab["area"], "nombre": trab["nombre"], "dias": 0, "incidencia": 0})
-    p["dias"] += 1
-    if not confirmado:
-        p["incidencia"] += 1
-
-# distribucion de sedes (donde marca cada personal), en base a TODAS sus
-# primeras marcaciones reales dentro del rango de Marcaciones (no solo los
-# dias con actividad reportada) para reflejar su patron real de asistencia
-dnis_tabla = set(por_persona.keys())
-for (dni, fecha), mk in primera_marcacion.items():
-    if dni not in dnis_tabla or not mk["marco"]:
-        continue
-    sede_friendly = sede_for_device(mk["device"]) or (mk["device"].title() if mk["device"] else "Otro")
-    marcas_persona.setdefault(dni, {})
-    marcas_persona[dni][sede_friendly] = marcas_persona[dni].get(sede_friendly, 0) + 1
+    registros.append({
+        "dni": dni,
+        "personal": trab["nombre"],
+        "area": trab["area"],
+        "fecha": fecha.isoformat(),
+        "mes": fecha.month,
+        "mesLabel": MESES_ES[fecha.month].capitalize(),
+        "hora": mk["hora"] if mk else None,
+        "sedeFormato": info["sede"],
+        "sedeFormatoAbrev": sede_raw,
+        "sedeReal": sede_real if mk and mk["marco"] else None,
+        "sedeRealAbrev": sede_real_abrev if mk and mk["marco"] else None,
+        "status": "correcto" if confirmado else "incorrecto",
+    })
 
 # ------------------------------------------------------------------
 # 5) salida
 # ------------------------------------------------------------------
-resumen = []
-for dni, p in por_persona.items():
-    pct = round(p["incidencia"] / p["dias"] * 100) if p["dias"] else 0
-    resumen.append({
-        "area": p["area"], "dni": dni, "personal": p["nombre"],
-        "dias": p["dias"], "incidencia": p["incidencia"], "porcentaje": pct,
-    })
-resumen.sort(key=lambda r: (-r["porcentaje"], r["personal"]))
-
-sede_chart = []
-for dni, counts in marcas_persona.items():
-    total = sum(counts.values())
-    top = sorted(counts.items(), key=lambda x: -x[1])
-    sede_chart.append({
-        "dni": dni, "personal": trabajadores[dni]["nombre"], "area": trabajadores[dni]["area"],
-        "total": total,
-        "sedes": [{"sede": s, "dias": n, "pct": round(n/total*100)} for s, n in top],
-    })
-sede_chart.sort(key=lambda r: r["personal"])
-
 out = {
     "generatedAt": datetime.now().isoformat(timespec="seconds"),
     "rangoMarcaciones": {
         "min": MARC_MIN.isoformat() if MARC_MIN else None,
         "max": MARC_MAX.isoformat() if MARC_MAX else None,
     },
-    "resumen": resumen,
-    "sedeChart": sede_chart,
+    "registros": registros,
 }
 
 version = datetime.now().strftime("%Y%m%d%H%M%S")
@@ -259,7 +251,7 @@ if idx_path.exists():
     html = re.sub(r'(data\.js|app\.js)\?v=\d+', lambda m: f"{m.group(1)}?v={version}", html)
     idx_path.write_text(html, encoding="utf-8")
 
-print(f"OK -> {len(resumen)} personas, rango marcaciones {MARC_MIN} a {MARC_MAX}")
-for r in resumen:
-    print(f"   {r['area']:7} {r['dni']:10} {r['personal']:38} dias={r['dias']:3} incidencia={r['incidencia']:3} ({r['porcentaje']}%)")
+correctos = sum(1 for r in registros if r["status"] == "correcto")
+print(f"OK -> {len(registros)} dia-registros, {correctos} correctos, {len(registros)-correctos} incorrectos")
+print(f"Rango marcaciones: {MARC_MIN} a {MARC_MAX}")
 print(f"data.js escrito, version {version}")
